@@ -1,244 +1,512 @@
 package me.azenet.UHPlugin.listeners;
 
-import java.util.ArrayList;
+import com.pgcraft.spectatorplus.SpectateAPI;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import me.azenet.UHPlugin.UHBorderManager;
 import me.azenet.UHPlugin.UHGameManager;
+import me.azenet.UHPlugin.UHMOTDManager;
 import me.azenet.UHPlugin.UHPlugin;
+import me.azenet.UHPlugin.UHProTipsSender;
+import me.azenet.UHPlugin.UHRuntimeCommandsExecutor;
+import me.azenet.UHPlugin.UHScoreboardManager;
+import me.azenet.UHPlugin.UHSound;
+import me.azenet.UHPlugin.UHTeam;
+import me.azenet.UHPlugin.UHTeamChatManager;
 import me.azenet.UHPlugin.UHTeamManager;
+import me.azenet.UHPlugin.UHTimer;
+import me.azenet.UHPlugin.UHTimerManager;
+import me.azenet.UHPlugin.events.EpisodeChangedCause;
+import me.azenet.UHPlugin.events.TimerEndsEvent;
+import me.azenet.UHPlugin.events.TimerStartsEvent;
+import me.azenet.UHPlugin.events.UHEpisodeChangedEvent;
+import me.azenet.UHPlugin.events.UHGameEndsEvent;
+import me.azenet.UHPlugin.events.UHGameStartsEvent;
+import me.azenet.UHPlugin.events.UHPlayerDeathEvent;
+import me.azenet.UHPlugin.events.UHPlayerResurrectedEvent;
+import me.azenet.UHPlugin.events.UHTeamDeathEvent;
 import me.azenet.UHPlugin.i18n.I18n;
-import me.azenet.UHPlugin.task.CancelBrewTask;
+import me.azenet.UHPlugin.integration.UHDynmapIntegration;
+import me.azenet.UHPlugin.integration.UHProtocolLibIntegrationWrapper;
+import me.azenet.UHPlugin.integration.UHSpectatorPlusIntegration;
+import me.azenet.UHPlugin.integration.UHWorldBorderIntegration;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
-import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
-import org.bukkit.Sound;
+import org.bukkit.Server;
+import org.bukkit.SkullType;
+import org.bukkit.World;
+import org.bukkit.command.CommandSender;
+import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.configuration.file.FileConfiguration;
-import org.bukkit.entity.EntityType;
-import org.bukkit.entity.Ghast;
-import org.bukkit.entity.Item;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
-import org.bukkit.event.block.Action;
+import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.CreatureSpawnEvent;
 import org.bukkit.event.entity.CreatureSpawnEvent.SpawnReason;
-import org.bukkit.event.entity.EntityDeathEvent;
-import org.bukkit.event.inventory.InventoryClickEvent;
-import org.bukkit.event.inventory.InventoryDragEvent;
-import org.bukkit.event.player.PlayerInteractEvent;
-import org.bukkit.event.player.PlayerItemConsumeEvent;
-import org.bukkit.event.player.PlayerPickupItemEvent;
-import org.bukkit.event.player.PlayerTeleportEvent;
-import org.bukkit.event.player.PlayerTeleportEvent.TeleportCause;
-import org.bukkit.event.weather.WeatherChangeEvent;
-import org.bukkit.inventory.BrewerInventory;
+import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.EntityRegainHealthEvent;
+import org.bukkit.event.entity.EntityRegainHealthEvent.RegainReason;
+import org.bukkit.event.entity.FoodLevelChangeEvent;
+import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.player.AsyncPlayerChatEvent;
+import org.bukkit.event.player.PlayerAchievementAwardedEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerLoginEvent;
+import org.bukkit.event.player.PlayerLoginEvent.Result;
+import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerStatisticIncrementEvent;
+import org.bukkit.event.server.ServerListPingEvent;
 import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.PlayerInventory;
-import org.bukkit.inventory.meta.ItemMeta;
-import org.bukkit.potion.PotionEffect;
-import org.bukkit.potion.PotionEffectType;
+import org.bukkit.inventory.meta.SkullMeta;
+import org.bukkit.plugin.PluginManager;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitScheduler;
 
-public class UHGameplayListener
+public class UHGameListener
   implements Listener
 {
   private UHPlugin p = null;
   private I18n i = null;
 
-  public UHGameplayListener(UHPlugin p) {
+  public UHGameListener(UHPlugin p) {
     this.p = p;
     this.i = p.getI18n();
   }
 
-  @EventHandler(ignoreCancelled=true)
-  public void onEntityDeath(EntityDeathEvent ev)
+  @EventHandler
+  public void onPlayerDeath(final PlayerDeathEvent ev)
   {
-    if (((ev.getEntity() instanceof Ghast)) && (this.p.getConfig().getBoolean("gameplay-changes.replaceGhastTearsWithGold"))) {
-      List drops = new ArrayList(ev.getDrops());
-      ev.getDrops().clear();
-      for (ItemStack i : drops)
-        if (i.getType() == Material.GHAST_TEAR)
-          ev.getDrops().add(new ItemStack(Material.GOLD_INGOT, i.getAmount()));
-        else
-          ev.getDrops().add(i);
+    if ((this.p.getGameManager().isPlayerDead(ev.getEntity())) || (!this.p.getGameManager().isGameStarted())) {
+      return;
     }
+
+    this.p.getServer().getPluginManager().callEvent(new UHPlayerDeathEvent(ev.getEntity(), ev));
+
+    this.p.getGameManager().getDeathSound().broadcast();
+
+    if (this.p.getConfig().getBoolean("death.announcements.lightning-strike")) {
+      ev.getEntity().getLocation().getWorld().strikeLightningEffect(ev.getEntity().getLocation());
+    }
+
+    this.p.getGameManager().addDead(ev.getEntity());
+
+    if (this.p.getConfig().getBoolean("death.kick.do", true)) {
+      Bukkit.getScheduler().runTaskLater(this.p, new BukkitRunnable()
+      {
+        public void run()
+        {
+          ev.getEntity().kickPlayer(UHGameListener.this.i.t("death.kickMessage"));
+        }
+      }
+      , 20L * this.p.getConfig().getInt("death.kick.time", 30));
+    }
+
+    if ((this.p.getConfig().getBoolean("death.head.drop")) && (
+      (!this.p.getConfig().getBoolean("death.head.pvpOnly")) || ((this.p.getConfig().getBoolean("death.head.pvpOnly")) && (ev.getEntity().getKiller() != null) && ((ev.getEntity().getKiller() instanceof Player)))))
+    {
+      Location l = ev.getEntity().getLocation();
+      try {
+        ItemStack skull = new ItemStack(Material.SKULL_ITEM, 1, (short)SkullType.PLAYER.ordinal());
+        SkullMeta skullMeta = (SkullMeta)skull.getItemMeta();
+        skullMeta.setOwner(ev.getEntity().getName());
+        skullMeta.setDisplayName(ChatColor.RESET + ev.getEntity().getName());
+        skull.setItemMeta(skullMeta);
+        l.getWorld().dropItem(l, skull);
+
+        if ((ev.getEntity().getKiller() instanceof Player)) {
+          final Player killer = ev.getEntity().getKiller();
+          Bukkit.getScheduler().runTaskLater(this.p, new BukkitRunnable()
+          {
+            public void run() {
+              UHGameListener.this.p.getProtipsSender().sendProtip(killer, "crafts.goldenHead");
+            }
+          }
+          , 200L);
+        }
+
+      }
+      catch (Exception e)
+      {
+        e.printStackTrace();
+      }
+
+    }
+
+    if (this.p.getConfig().getInt("death.give-xp-to-killer.levels") > 0) {
+      Entity killer = ev.getEntity().getKiller();
+      if ((killer != null) && ((killer instanceof Player)))
+      {
+        boolean inSameTeam = this.p.getTeamManager().inSameTeam(ev.getEntity(), (Player)killer);
+        boolean onlyOtherTeam = this.p.getConfig().getBoolean("death.give-xp-to-killer.onlyOtherTeam");
+
+        if (((onlyOtherTeam) && (!inSameTeam)) || (!onlyOtherTeam)) {
+          ((Player)killer).giveExpLevels(this.p.getConfig().getInt("death.give-xp-to-killer.levels"));
+        }
+      }
+
+    }
+
+    final UHTeam team = this.p.getTeamManager().getTeamForPlayer(ev.getEntity());
+    if (team != null) {
+      boolean isAliveTeam = false;
+
+      for (UUID playerID : team.getPlayersUUID()) {
+        if (!this.p.getGameManager().isPlayerDead(playerID)) {
+          isAliveTeam = true;
+          break;
+        }
+      }
+
+      if (!isAliveTeam) {
+        this.p.getServer().getPluginManager().callEvent(new UHTeamDeathEvent(team));
+
+        if (this.p.getConfig().getBoolean("death.messages.notifyIfTeamHasFallen", false))
+        {
+          Bukkit.getScheduler().runTaskLater(this.p, new BukkitRunnable()
+          {
+            public void run() {
+              String format = ChatColor.translateAlternateColorCodes('&', UHGameListener.this.p.getConfig().getString("death.messages.teamDeathMessagesFormat", ""));
+              UHGameListener.this.p.getServer().broadcastMessage(UHGameListener.this.i.t("death.teamHasFallen", new String[] { format, team.getDisplayName() + format }));
+            }
+          }
+          , 1L);
+        }
+
+      }
+
+    }
+
+    this.p.getServer().getConsoleSender().sendMessage(ChatColor.GOLD + "-- Death of " + ev.getEntity().getDisplayName() + ChatColor.GOLD + " (" + ev.getDeathMessage() + ") --");
+
+    String dmFormat = ChatColor.translateAlternateColorCodes('&', this.p.getConfig().getString("death.messages.deathMessagesFormat", ""));
+    String deathMessage = dmFormat + ev.getDeathMessage();
+    deathMessage = deathMessage.replace(ev.getEntity().getName(), ev.getEntity().getDisplayName() + dmFormat);
+    if (ev.getEntity().getKiller() != null) {
+      deathMessage = deathMessage.replace(ev.getEntity().getKiller().getName(), ev.getEntity().getKiller().getDisplayName() + dmFormat);
+    }
+    ev.setDeathMessage(deathMessage);
+
+    this.p.getGameManager().addDeathLocation(ev.getEntity(), ev.getEntity().getLocation());
+
+    this.p.getDynmapIntegration().showDeathLocation(ev.getEntity());
+
+    if ((this.p.getGameManager().isGameRunning()) && (this.p.getGameManager().getAliveTeamsCount().intValue() == 1)) {
+      this.p.getGameManager().setGameFinished(true);
+
+      this.p.getServer().getPluginManager().callEvent(new UHGameEndsEvent((UHTeam)this.p.getGameManager().getAliveTeams().iterator().next()));
+    }
+
+    if ((this.p.getConfig().getBoolean("hardcore-hearts.display")) && (this.p.getProtocolLibIntegrationWrapper().isProtocolLibIntegrationEnabled()) && (this.p.getConfig().getBoolean("hardcore-hearts.respawnMessage"))) {
+      Bukkit.getScheduler().runTaskLater(this.p, new BukkitRunnable()
+      {
+        public void run() {
+          ev.getEntity().sendMessage(UHGameListener.this.i.t("death.canRespawn"));
+        }
+      }
+      , 2L);
+    }
+
+    if ((this.p.getConfig().getBoolean("teams-options.teamChat.disableLockOnDeath")) && 
+      (this.p.getTeamChatManager().isTeamChatEnabled(ev.getEntity())))
+      this.p.getTeamChatManager().toggleChatForPlayer(ev.getEntity());
   }
 
-  @EventHandler(ignoreCancelled=true)
-  public void onPlayerPickupItem(PlayerPickupItemEvent ev)
+  @EventHandler
+  public void onEntityDamage(EntityDamageEvent ev)
   {
-    if ((ev.getItem().getItemStack().getType() == Material.GHAST_TEAR) && (ev.getPlayer().getGameMode().equals(GameMode.SURVIVAL)) && (this.p.getConfig().getBoolean("gameplay-changes.replaceGhastTearsWithGold")))
+    if (((ev.getEntity() instanceof Player)) && 
+      (!this.p.getGameManager().isTakingDamage()))
       ev.setCancelled(true);
   }
 
   @EventHandler
-  public void onInventoryDrag(InventoryDragEvent ev)
+  public void onEntityRegainHealth(EntityRegainHealthEvent ev)
   {
-    if ((this.p.getConfig().getBoolean("gameplay-changes.disableLevelIIPotions")) && ((ev.getInventory() instanceof BrewerInventory)))
-      new CancelBrewTask((BrewerInventory)ev.getInventory(), ev.getWhoClicked()).runTaskLater(this.p, 1L);
+    if (ev.getRegainReason() == EntityRegainHealthEvent.RegainReason.SATIATED)
+      ev.setCancelled(true);
   }
 
   @EventHandler
-  public void onInventoryClick(InventoryClickEvent ev)
+  public void onFoodUpdate(FoodLevelChangeEvent ev)
   {
-    if ((this.p.getConfig().getBoolean("gameplay-changes.disableLevelIIPotions")) && ((ev.getInventory() instanceof BrewerInventory)))
-      new CancelBrewTask((BrewerInventory)ev.getInventory(), ev.getWhoClicked()).runTaskLater(this.p, 1L);
-  }
+    if (!this.p.getGameManager().isGameRunning()) {
+      if ((ev.getEntity() instanceof Player)) {
+        ((Player)ev.getEntity()).setFoodLevel(20);
+        ((Player)ev.getEntity()).setSaturation(20.0F);
+      }
 
-  @EventHandler(ignoreCancelled=true)
-  public void onPlayerTeleport(PlayerTeleportEvent ev)
-  {
-    if ((this.p.getConfig().getBoolean("gameplay-changes.disableEnderpearlsDamages")) && 
-      (ev.getCause() == PlayerTeleportEvent.TeleportCause.ENDER_PEARL)) {
       ev.setCancelled(true);
-      ev.getPlayer().teleport(ev.getTo(), PlayerTeleportEvent.TeleportCause.PLUGIN);
     }
   }
 
   @EventHandler
   public void onCreatureSpawn(CreatureSpawnEvent ev)
   {
-    if (ev.getEntityType().equals(EntityType.WITCH)) {
-      if ((this.p.getConfig().getBoolean("gameplay-changes.witch.disableNaturalSpawn")) && (ev.getSpawnReason().equals(CreatureSpawnEvent.SpawnReason.NATURAL))) {
+    if ((!this.p.getGameManager().isGameStarted()) && ((ev.getSpawnReason() == CreatureSpawnEvent.SpawnReason.NATURAL) || (ev.getSpawnReason() == CreatureSpawnEvent.SpawnReason.NETHER_PORTAL) || (ev.getSpawnReason() == CreatureSpawnEvent.SpawnReason.LIGHTNING) || (ev.getSpawnReason() == CreatureSpawnEvent.SpawnReason.SPAWNER)))
+    {
+      switch (7.$SwitchMap$org$bukkit$entity$EntityType[ev.getEntityType().ordinal()]) {
+      case 1:
+      case 2:
+      case 3:
+      case 4:
+      case 5:
+      case 6:
+      case 7:
+      case 8:
+      case 9:
+      case 10:
+      case 11:
         ev.setCancelled(true);
+        break;
       }
-      if ((this.p.getConfig().getBoolean("gameplay-changes.witch.disableLightningSpawn")) && (ev.getSpawnReason().equals(CreatureSpawnEvent.SpawnReason.LIGHTNING)))
-        ev.setCancelled(true);
     }
   }
 
   @EventHandler
-  public void onPlayerItemConsume(final PlayerItemConsumeEvent ev)
+  public void onServerListPing(ServerListPingEvent ev)
   {
-    int TICKS_BETWEEN_EACH_REGENERATION = 50;
-    int DEFAULT_NUMBER_OF_HEARTS_REGEN = 4;
-    int DEFAULT_NUMBER_OF_HEARTS_REGEN_NOTCH = 180;
-    int REGENERATION_LEVEL_GOLDEN_APPLE = 2;
-    int REGENERATION_LEVEL_NOTCH_GOLDEN_APPLE = 5;
+    if (this.p.getMOTDManager().isEnabled())
+      ev.setMotd(this.p.getMOTDManager().getCurrentMOTD());
+  }
 
-    if (ev.getItem().getType() == Material.GOLDEN_APPLE) {
-      ItemMeta meta = ev.getItem().getItemMeta();
-      short dataValue = ev.getItem().getDurability();
-      int halfHearts = 0;
-      int level = 0;
+  @EventHandler
+  public void onPlayerLogin(PlayerLoginEvent ev)
+  {
+    if ((this.p.getGameManager().isGameStarted()) && (this.p.getGameManager().isPlayerDead(ev.getPlayer())) && (!this.p.getGameManager().isDeadPlayersToBeResurrected(ev.getPlayer())) && (!this.p.getConfig().getBoolean("death.kick.allow-reconnect", true)))
+    {
+      ev.setResult(PlayerLoginEvent.Result.KICK_OTHER);
+      ev.setKickMessage(this.i.t("death.banMessage"));
+    }
+  }
 
-      if ((meta.hasDisplayName()) && ((meta.getDisplayName().equals(ChatColor.RESET + this.i.t("craft.goldenApple.nameGoldenAppleFromHeadNormal"))) || (meta.getDisplayName().equals(ChatColor.RESET + this.i.t("craft.goldenApple.nameGoldenAppleFromHeadNotch")))))
+  @EventHandler(priority=EventPriority.HIGHEST)
+  public void onPlayerJoin(final PlayerJoinEvent ev)
+  {
+    if (!this.p.getGameManager().isGameStarted()) {
+      if (!this.p.getGameManager().isSlowStartInProgress())
       {
-        if (dataValue == 0) {
-          halfHearts = this.p.getConfig().getInt("gameplay-changes.goldenApple.regeneration.fromNormalHead", 4);
-          level = 2;
-        }
-        else {
-          halfHearts = this.p.getConfig().getInt("gameplay-changes.goldenApple.regeneration.fromNotchHead", 180);
-          level = 5;
-        }
-      }
-      else if (dataValue == 0) {
-        halfHearts = this.p.getConfig().getInt("gameplay-changes.goldenApple.regeneration.normal", 4);
-        level = 2;
-      }
-      else {
-        halfHearts = this.p.getConfig().getInt("gameplay-changes.goldenApple.regeneration.notch", 180);
-        level = 5;
-      }
+        this.p.getGameManager().initPlayer(ev.getPlayer());
 
-      final int realLevel = level - 1;
+        this.p.getScoreboardManager().addPlayerBeforeStart();
 
-      if (((dataValue != 0) || (halfHearts != 4)) && ((dataValue != 1) || (halfHearts != 180)))
-      {
-        if (((dataValue == 0) && (halfHearts > 4)) || ((dataValue == 1) && (halfHearts > 180)))
-        {
-          int duration = (int)Math.floor(50.0D / Math.pow(2.0D, realLevel)) * halfHearts;
-
-          new PotionEffect(PotionEffectType.REGENERATION, duration, realLevel).apply(ev.getPlayer());
-        }
-        else
-        {
-          final int healthApplied = halfHearts - 1;
-
-          Bukkit.getScheduler().runTaskLater(this.p, new BukkitRunnable()
+        if ((this.p.getConfig().getBoolean("teams-options.gui.autoDisplay")) && (this.p.getTeamManager().getTeams().size() != 0)) {
+          this.p.getServer().getScheduler().runTaskLater(this.p, new Runnable()
           {
-            public void run()
-            {
-              ev.getPlayer().removePotionEffect(PotionEffectType.REGENERATION);
-
-              int duration = (int)Math.floor(50.0D / Math.pow(2.0D, realLevel)) * healthApplied;
-
-              new PotionEffect(PotionEffectType.REGENERATION, duration, realLevel).apply(ev.getPlayer());
+            public void run() {
+              if (UHGameListener.this.p.getTeamManager().getTeamForPlayer(ev.getPlayer()) == null)
+                UHGameListener.this.p.getTeamManager().displayTeamChooserChatGUI(ev.getPlayer());
             }
           }
-          , 2L);
+          , 20L * this.p.getConfig().getInt("teams-options.gui.delay"));
         }
+
       }
+      else
+      {
+        ev.getPlayer().setAllowFlight(true);
+        ev.getPlayer().setFlying(true);
+      }
+
     }
-  }
 
-  @EventHandler
-  public void onPlayerInteract(PlayerInteractEvent ev)
-  {
-    if (((ev.getAction() == Action.RIGHT_CLICK_AIR) || (ev.getAction() == Action.RIGHT_CLICK_BLOCK)) && (ev.getPlayer().getItemInHand().getType() == Material.COMPASS) && (this.p.getConfig().getBoolean("gameplay-changes.compass.enabled")) && (!this.p.getGameManager().isPlayerDead(ev.getPlayer()))) {
-      Player player1 = ev.getPlayer();
+    this.p.getScoreboardManager().setScoreboardForPlayer(ev.getPlayer());
 
-      Boolean foundRottenFlesh = Boolean.valueOf(false);
-      for (ItemStack item : player1.getInventory().getContents()) {
-        if ((item != null) && (item.getType() == Material.ROTTEN_FLESH)) {
-          if (item.getAmount() != 1) {
-            item.setAmount(item.getAmount() - 1);
+    this.p.getTeamManager().colorizePlayer(ev.getPlayer());
+
+    if ((!this.p.getGameManager().isGameStarted()) && (ev.getPlayer().hasPermission("uh.*")))
+    {
+      if (!this.p.getWorldBorderIntegration().isWBIntegrationEnabled()) {
+        ev.getPlayer().sendMessage(this.i.t("load.WBNotInstalled1"));
+        ev.getPlayer().sendMessage(this.i.t("load.WBNotInstalled2"));
+        ev.getPlayer().sendMessage(this.i.t("load.WBNotInstalled3"));
+      }
+
+      if (!this.p.getSpectatorPlusIntegration().isSPIntegrationEnabled()) {
+        ev.getPlayer().sendMessage(this.i.t("load.SPNotInstalled1"));
+        ev.getPlayer().sendMessage(this.i.t("load.SPNotInstalled2"));
+      }
+
+      if (!this.p.getProtocolLibIntegrationWrapper().isProtocolLibIntegrationEnabled()) {
+        List enabledOptionsWithProtocolLibNeeded = this.p.getProtocolLibIntegrationWrapper().isProtocolLibNeeded();
+
+        if (enabledOptionsWithProtocolLibNeeded != null) {
+          ev.getPlayer().sendMessage(this.i.t("load.PLNotInstalled1"));
+          ev.getPlayer().sendMessage(this.i.t("load.PLNotInstalled2"));
+          for (String option : enabledOptionsWithProtocolLibNeeded) {
+            ev.getPlayer().sendMessage(this.i.t("load.PLNotInstalledItem", new String[] { option }));
+          }
+
+          String pLibDownloadURL = "";
+          if (this.p.getServer().getBukkitVersion().contains("1.7")) {
+            pLibDownloadURL = "http://dev.bukkit.org/bukkit-plugins/protocollib/";
           }
           else {
-            player1.getInventory().removeItem(new ItemStack[] { item });
+            pLibDownloadURL = "http://www.spigotmc.org/resources/protocollib.1997/";
           }
-
-          player1.updateInventory();
-          foundRottenFlesh = Boolean.valueOf(true);
-          break;
+          ev.getPlayer().sendMessage(this.i.t("load.PLNotInstalled3", new String[] { pLibDownloadURL }));
         }
       }
 
-      if (!foundRottenFlesh.booleanValue()) {
-        player1.sendMessage(this.i.t("compass.noRottenFlesh"));
-        player1.playSound(player1.getLocation(), Sound.STEP_WOOD, 1.0F, 1.0F);
-        return;
-      }
+    }
 
-      Player nearest = null;
-      Double distance = Double.valueOf(99999.0D);
-      for (Player player2 : this.p.getGameManager().getOnlineAlivePlayers()) {
-        try {
-          Double calc = Double.valueOf(player1.getLocation().distance(player2.getLocation()));
+    if (this.p.getGameManager().isDeadPlayersToBeResurrected(ev.getPlayer())) {
+      this.p.getGameManager().resurrectPlayerOnlineTask(ev.getPlayer());
+      this.p.getGameManager().markPlayerAsResurrected(ev.getPlayer());
+    }
 
-          if ((calc.doubleValue() > 1.0D) && (calc.doubleValue() < distance.doubleValue())) {
-            distance = calc;
-            if ((!player2.getUniqueId().equals(player1.getUniqueId())) && (!this.p.getTeamManager().inSameTeam(player1, player2))) {
-              nearest = player2.getPlayer();
-            }
-          }
-        }
-        catch (Exception ignored)
-        {
-        }
-      }
-      if (nearest == null) {
-        player1.sendMessage(this.i.t("compass.nothingFound"));
-
-        player1.playSound(player1.getLocation(), Sound.STEP_WOOD, 1.0F, 1.0F);
-        return;
-      }
-
-      player1.sendMessage(this.i.t("compass.success"));
-      player1.setCompassTarget(nearest.getLocation());
-
-      player1.playSound(player1.getLocation(), Sound.ENDERMAN_TELEPORT, 1.0F, 1.0F);
+    if ((this.p.getGameManager().isGameRunning()) && (this.p.getConfig().getBoolean("spectatorModeWhenNewPlayerJoinAfterStart")) && (!this.p.getGameManager().getAlivePlayers().contains(ev.getPlayer())) && (this.p.getSpectatorPlusIntegration().isSPIntegrationEnabled()))
+    {
+      this.p.getSpectatorPlusIntegration().getSPAPI().setSpectating(ev.getPlayer(), true);
     }
   }
 
   @EventHandler
-  public void onWeatherChange(WeatherChangeEvent ev)
+  public void onPlayerLeave(PlayerQuitEvent ev)
   {
-    if (!this.p.getConfig().getBoolean("gameplay-changes.weather"))
+    if (!this.p.getGameManager().isGameStarted())
+    {
+      this.p.getScoreboardManager().removePlayerBeforeStart();
+    }
+  }
+
+  @EventHandler
+  public void onPlayerAchievementAwarded(PlayerAchievementAwardedEvent ev)
+  {
+    if ((!this.p.getGameManager().isGameStarted()) && (this.p.getConfig().getBoolean("achievements.disableAchievementsBeforeStart", true)))
       ev.setCancelled(true);
+  }
+
+  @EventHandler
+  public void onPlayerStatisticIncrement(PlayerStatisticIncrementEvent ev)
+  {
+    if ((!this.p.getGameManager().isGameStarted()) && (this.p.getConfig().getBoolean("statistics.disableStatisticsBeforeStart", true)))
+      ev.setCancelled(true);
+  }
+
+  @EventHandler
+  public void onBlockBreakEvent(BlockBreakEvent ev)
+  {
+    if ((!this.p.getGameManager().isGameStarted()) && (!ev.getPlayer().hasPermission("uh.build")))
+      ev.setCancelled(true);
+  }
+
+  @EventHandler
+  public void onBlockPlaceEvent(BlockPlaceEvent ev)
+  {
+    if ((!this.p.getGameManager().isGameStarted()) && (!ev.getPlayer().hasPermission("uh.build")))
+      ev.setCancelled(true);
+  }
+
+  @EventHandler(priority=EventPriority.LOWEST)
+  public void onAsyncPlayerChat(AsyncPlayerChatEvent ev)
+  {
+    if (ev.isAsynchronous())
+      if (this.p.getTeamChatManager().isTeamChatEnabled(ev.getPlayer())) {
+        ev.setCancelled(true);
+        this.p.getTeamChatManager().sendTeamMessage(ev.getPlayer(), ev.getMessage());
+      }
+      else if (this.p.getTeamChatManager().isOtherTeamChatEnabled(ev.getPlayer())) {
+        ev.setCancelled(true);
+        this.p.getTeamChatManager().sendTeamMessage(ev.getPlayer(), ev.getMessage(), this.p.getTeamChatManager().getOtherTeamEnabled(ev.getPlayer()));
+      }
+  }
+
+  @EventHandler
+  public void onTimerEnds(TimerEndsEvent ev)
+  {
+    this.p.getTimerManager().updateStartedTimersList();
+
+    if (ev.getTimer().equals(this.p.getTimerManager().getMainTimer()))
+    {
+      this.p.getGameManager().shiftEpisode();
+      ev.setRestart(true);
+    }
+    else {
+      this.p.getScoreboardManager().hideTimer(ev.getTimer());
+    }
+
+    if ((ev.getTimer().equals(this.p.getBorderManager().getWarningTimer())) && (ev.wasTimerUp())) {
+      this.p.getBorderManager().getWarningSender().sendMessage(this.i.t("borders.warning.timerUp"));
+      this.p.getBorderManager().sendCheckMessage(this.p.getBorderManager().getWarningSender(), this.p.getBorderManager().getWarningSize());
+    }
+  }
+
+  @EventHandler
+  public void onTimerStarts(TimerStartsEvent ev)
+  {
+    this.p.getTimerManager().updateStartedTimersList();
+
+    if (!ev.getTimer().equals(this.p.getTimerManager().getMainTimer()))
+      this.p.getScoreboardManager().displayTimer(ev.getTimer());
+  }
+
+  @EventHandler
+  public void onEpisodeChange(UHEpisodeChangedEvent ev)
+  {
+    String message = null;
+    if (ev.getCause() == EpisodeChangedCause.SHIFTED) {
+      message = this.i.t("episodes.endForced", new String[] { String.valueOf(ev.getNewEpisode() - 1), ev.getShifter() });
+    }
+    else {
+      message = this.i.t("episodes.end", new String[] { String.valueOf(ev.getNewEpisode() - 1) });
+    }
+    this.p.getServer().broadcastMessage(message);
+  }
+
+  @EventHandler
+  public void onGameStarts(UHGameStartsEvent ev)
+  {
+    new UHSound(this.p.getConfig().getConfigurationSection("start.sound")).broadcast();
+
+    Bukkit.getServer().broadcastMessage(this.i.t("start.go"));
+
+    this.p.getRuntimeCommandsExecutor().registerCommandsInScheduler("internal.game-start");
+
+    this.p.getMOTDManager().updateMOTDDuringGame();
+  }
+
+  @EventHandler
+  public void onGameEnd(UHGameEndsEvent ev)
+  {
+    if (this.p.getConfig().getBoolean("finish.auto.do")) {
+      Bukkit.getScheduler().runTaskLater(this.p, new BukkitRunnable()
+      {
+        public void run() {
+          try {
+            UHGameListener.this.p.getGameManager().finishGame();
+          }
+          catch (IllegalStateException e) {
+            e.printStackTrace();
+          }
+        }
+      }
+      , this.p.getConfig().getInt("finish.auto.timeAfterLastDeath", 3) * 20L);
+    }
+
+    this.p.getRuntimeCommandsExecutor().registerCommandsInScheduler("internal.game-end");
+
+    this.p.getMOTDManager().updateMOTDAfterGame(ev.getWinnerTeam());
+  }
+
+  @EventHandler
+  public void onPlayerResurrected(UHPlayerResurrectedEvent ev)
+  {
+    if (this.p.getSpectatorPlusIntegration().isSPIntegrationEnabled()) {
+      this.p.getSpectatorPlusIntegration().getSPAPI().setSpectating(ev.getPlayer(), false);
+    }
+
+    this.p.getDynmapIntegration().hideDeathLocation(ev.getPlayer());
+
+    this.p.getServer().broadcastMessage(this.i.t("resurrect.broadcastMessage", new String[] { ev.getPlayer().getName() }));
+
+    this.p.getMOTDManager().updateMOTDDuringGame();
   }
 }
