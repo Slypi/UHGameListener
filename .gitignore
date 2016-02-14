@@ -1,0 +1,244 @@
+package me.azenet.UHPlugin.listeners;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+import me.azenet.UHPlugin.UHGameManager;
+import me.azenet.UHPlugin.UHPlugin;
+import me.azenet.UHPlugin.UHTeamManager;
+import me.azenet.UHPlugin.i18n.I18n;
+import me.azenet.UHPlugin.task.CancelBrewTask;
+import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
+import org.bukkit.GameMode;
+import org.bukkit.Location;
+import org.bukkit.Material;
+import org.bukkit.Sound;
+import org.bukkit.configuration.file.FileConfiguration;
+import org.bukkit.entity.EntityType;
+import org.bukkit.entity.Ghast;
+import org.bukkit.entity.Item;
+import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.block.Action;
+import org.bukkit.event.entity.CreatureSpawnEvent;
+import org.bukkit.event.entity.CreatureSpawnEvent.SpawnReason;
+import org.bukkit.event.entity.EntityDeathEvent;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerItemConsumeEvent;
+import org.bukkit.event.player.PlayerPickupItemEvent;
+import org.bukkit.event.player.PlayerTeleportEvent;
+import org.bukkit.event.player.PlayerTeleportEvent.TeleportCause;
+import org.bukkit.event.weather.WeatherChangeEvent;
+import org.bukkit.inventory.BrewerInventory;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.PlayerInventory;
+import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.potion.PotionEffect;
+import org.bukkit.potion.PotionEffectType;
+import org.bukkit.scheduler.BukkitRunnable;
+import org.bukkit.scheduler.BukkitScheduler;
+
+public class UHGameplayListener
+  implements Listener
+{
+  private UHPlugin p = null;
+  private I18n i = null;
+
+  public UHGameplayListener(UHPlugin p) {
+    this.p = p;
+    this.i = p.getI18n();
+  }
+
+  @EventHandler(ignoreCancelled=true)
+  public void onEntityDeath(EntityDeathEvent ev)
+  {
+    if (((ev.getEntity() instanceof Ghast)) && (this.p.getConfig().getBoolean("gameplay-changes.replaceGhastTearsWithGold"))) {
+      List drops = new ArrayList(ev.getDrops());
+      ev.getDrops().clear();
+      for (ItemStack i : drops)
+        if (i.getType() == Material.GHAST_TEAR)
+          ev.getDrops().add(new ItemStack(Material.GOLD_INGOT, i.getAmount()));
+        else
+          ev.getDrops().add(i);
+    }
+  }
+
+  @EventHandler(ignoreCancelled=true)
+  public void onPlayerPickupItem(PlayerPickupItemEvent ev)
+  {
+    if ((ev.getItem().getItemStack().getType() == Material.GHAST_TEAR) && (ev.getPlayer().getGameMode().equals(GameMode.SURVIVAL)) && (this.p.getConfig().getBoolean("gameplay-changes.replaceGhastTearsWithGold")))
+      ev.setCancelled(true);
+  }
+
+  @EventHandler
+  public void onInventoryDrag(InventoryDragEvent ev)
+  {
+    if ((this.p.getConfig().getBoolean("gameplay-changes.disableLevelIIPotions")) && ((ev.getInventory() instanceof BrewerInventory)))
+      new CancelBrewTask((BrewerInventory)ev.getInventory(), ev.getWhoClicked()).runTaskLater(this.p, 1L);
+  }
+
+  @EventHandler
+  public void onInventoryClick(InventoryClickEvent ev)
+  {
+    if ((this.p.getConfig().getBoolean("gameplay-changes.disableLevelIIPotions")) && ((ev.getInventory() instanceof BrewerInventory)))
+      new CancelBrewTask((BrewerInventory)ev.getInventory(), ev.getWhoClicked()).runTaskLater(this.p, 1L);
+  }
+
+  @EventHandler(ignoreCancelled=true)
+  public void onPlayerTeleport(PlayerTeleportEvent ev)
+  {
+    if ((this.p.getConfig().getBoolean("gameplay-changes.disableEnderpearlsDamages")) && 
+      (ev.getCause() == PlayerTeleportEvent.TeleportCause.ENDER_PEARL)) {
+      ev.setCancelled(true);
+      ev.getPlayer().teleport(ev.getTo(), PlayerTeleportEvent.TeleportCause.PLUGIN);
+    }
+  }
+
+  @EventHandler
+  public void onCreatureSpawn(CreatureSpawnEvent ev)
+  {
+    if (ev.getEntityType().equals(EntityType.WITCH)) {
+      if ((this.p.getConfig().getBoolean("gameplay-changes.witch.disableNaturalSpawn")) && (ev.getSpawnReason().equals(CreatureSpawnEvent.SpawnReason.NATURAL))) {
+        ev.setCancelled(true);
+      }
+      if ((this.p.getConfig().getBoolean("gameplay-changes.witch.disableLightningSpawn")) && (ev.getSpawnReason().equals(CreatureSpawnEvent.SpawnReason.LIGHTNING)))
+        ev.setCancelled(true);
+    }
+  }
+
+  @EventHandler
+  public void onPlayerItemConsume(final PlayerItemConsumeEvent ev)
+  {
+    int TICKS_BETWEEN_EACH_REGENERATION = 50;
+    int DEFAULT_NUMBER_OF_HEARTS_REGEN = 4;
+    int DEFAULT_NUMBER_OF_HEARTS_REGEN_NOTCH = 180;
+    int REGENERATION_LEVEL_GOLDEN_APPLE = 2;
+    int REGENERATION_LEVEL_NOTCH_GOLDEN_APPLE = 5;
+
+    if (ev.getItem().getType() == Material.GOLDEN_APPLE) {
+      ItemMeta meta = ev.getItem().getItemMeta();
+      short dataValue = ev.getItem().getDurability();
+      int halfHearts = 0;
+      int level = 0;
+
+      if ((meta.hasDisplayName()) && ((meta.getDisplayName().equals(ChatColor.RESET + this.i.t("craft.goldenApple.nameGoldenAppleFromHeadNormal"))) || (meta.getDisplayName().equals(ChatColor.RESET + this.i.t("craft.goldenApple.nameGoldenAppleFromHeadNotch")))))
+      {
+        if (dataValue == 0) {
+          halfHearts = this.p.getConfig().getInt("gameplay-changes.goldenApple.regeneration.fromNormalHead", 4);
+          level = 2;
+        }
+        else {
+          halfHearts = this.p.getConfig().getInt("gameplay-changes.goldenApple.regeneration.fromNotchHead", 180);
+          level = 5;
+        }
+      }
+      else if (dataValue == 0) {
+        halfHearts = this.p.getConfig().getInt("gameplay-changes.goldenApple.regeneration.normal", 4);
+        level = 2;
+      }
+      else {
+        halfHearts = this.p.getConfig().getInt("gameplay-changes.goldenApple.regeneration.notch", 180);
+        level = 5;
+      }
+
+      final int realLevel = level - 1;
+
+      if (((dataValue != 0) || (halfHearts != 4)) && ((dataValue != 1) || (halfHearts != 180)))
+      {
+        if (((dataValue == 0) && (halfHearts > 4)) || ((dataValue == 1) && (halfHearts > 180)))
+        {
+          int duration = (int)Math.floor(50.0D / Math.pow(2.0D, realLevel)) * halfHearts;
+
+          new PotionEffect(PotionEffectType.REGENERATION, duration, realLevel).apply(ev.getPlayer());
+        }
+        else
+        {
+          final int healthApplied = halfHearts - 1;
+
+          Bukkit.getScheduler().runTaskLater(this.p, new BukkitRunnable()
+          {
+            public void run()
+            {
+              ev.getPlayer().removePotionEffect(PotionEffectType.REGENERATION);
+
+              int duration = (int)Math.floor(50.0D / Math.pow(2.0D, realLevel)) * healthApplied;
+
+              new PotionEffect(PotionEffectType.REGENERATION, duration, realLevel).apply(ev.getPlayer());
+            }
+          }
+          , 2L);
+        }
+      }
+    }
+  }
+
+  @EventHandler
+  public void onPlayerInteract(PlayerInteractEvent ev)
+  {
+    if (((ev.getAction() == Action.RIGHT_CLICK_AIR) || (ev.getAction() == Action.RIGHT_CLICK_BLOCK)) && (ev.getPlayer().getItemInHand().getType() == Material.COMPASS) && (this.p.getConfig().getBoolean("gameplay-changes.compass.enabled")) && (!this.p.getGameManager().isPlayerDead(ev.getPlayer()))) {
+      Player player1 = ev.getPlayer();
+
+      Boolean foundRottenFlesh = Boolean.valueOf(false);
+      for (ItemStack item : player1.getInventory().getContents()) {
+        if ((item != null) && (item.getType() == Material.ROTTEN_FLESH)) {
+          if (item.getAmount() != 1) {
+            item.setAmount(item.getAmount() - 1);
+          }
+          else {
+            player1.getInventory().removeItem(new ItemStack[] { item });
+          }
+
+          player1.updateInventory();
+          foundRottenFlesh = Boolean.valueOf(true);
+          break;
+        }
+      }
+
+      if (!foundRottenFlesh.booleanValue()) {
+        player1.sendMessage(this.i.t("compass.noRottenFlesh"));
+        player1.playSound(player1.getLocation(), Sound.STEP_WOOD, 1.0F, 1.0F);
+        return;
+      }
+
+      Player nearest = null;
+      Double distance = Double.valueOf(99999.0D);
+      for (Player player2 : this.p.getGameManager().getOnlineAlivePlayers()) {
+        try {
+          Double calc = Double.valueOf(player1.getLocation().distance(player2.getLocation()));
+
+          if ((calc.doubleValue() > 1.0D) && (calc.doubleValue() < distance.doubleValue())) {
+            distance = calc;
+            if ((!player2.getUniqueId().equals(player1.getUniqueId())) && (!this.p.getTeamManager().inSameTeam(player1, player2))) {
+              nearest = player2.getPlayer();
+            }
+          }
+        }
+        catch (Exception ignored)
+        {
+        }
+      }
+      if (nearest == null) {
+        player1.sendMessage(this.i.t("compass.nothingFound"));
+
+        player1.playSound(player1.getLocation(), Sound.STEP_WOOD, 1.0F, 1.0F);
+        return;
+      }
+
+      player1.sendMessage(this.i.t("compass.success"));
+      player1.setCompassTarget(nearest.getLocation());
+
+      player1.playSound(player1.getLocation(), Sound.ENDERMAN_TELEPORT, 1.0F, 1.0F);
+    }
+  }
+
+  @EventHandler
+  public void onWeatherChange(WeatherChangeEvent ev)
+  {
+    if (!this.p.getConfig().getBoolean("gameplay-changes.weather"))
+      ev.setCancelled(true);
+  }
+}
